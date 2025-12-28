@@ -623,12 +623,12 @@
 			'elementor/frontend/init',
 			function () {
 				elementorFrontend.hooks.addAction('frontend/element_ready/widget', function ($scope) {
-	
+
 					if ($scope.data('widget_type') == "wpzoom-elementor-instagram-widget.default") {
 						// Handle both masonry and regular layouts for Elementor
 						$scope.find('.zoom-instagram-widget__items').each(function() {
 							const $container = $(this);
-							
+
 							if ($container.hasClass('layout-masonry')) {
 								// Try to use WordPress masonry if available
 								if (typeof $.fn.masonry === 'function') {
@@ -649,7 +649,7 @@
 							}
 						});
 					}
-	
+
 				});
 			}
 		);

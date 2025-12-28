@@ -3,9 +3,9 @@ Contributors: WPZOOM, nvartolomei, ciorici
 Donate link: https://www.wpzoom.com/
 Tags: instagram, instagram feed, instagram gallery, instagram photos, instagram widget
 Requires at least: 6.0
-Tested up to: 6.8
+Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.2.8
+Stable tag: 2.2.10
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -33,20 +33,21 @@ Formerly known as *Instagram Widget by WPZOOM*, **WPZOOM Social Feed Widget** is
 
 = FREE FEATURES =
 
-* **Create Multiple Feeds** 🆕
-* **Display your Instagram Feeds using Gutenberg Blocks** 🆕
-* **Embed your feeds using Shortcodes in Elementor and other page builders** 🆕
-* **Multiple Layouts** 🆕
+* **Create Multiple Feeds**
+* **Display your Instagram Feeds using Gutenberg Blocks**
+* **Embed your feeds using Shortcodes in Elementor and other page builders**
+* **Multiple Layouts**
 * **Lightbox**
 * Add your custom avatar and bio
 * Supports Lazy Loading
 
 = ⭐️ PRO FEATURES ⭐️ =
 * **Connect Multiple Instagram Accounts**
+* **Display Intagram Stories - 🆕**
 * **Display Followers Count - 🆕**
-* **Masonry Layout - 🆕**
+* **Masonry Layout**
 * **Carousel**
-* **Responsive Columns - 🆕**
+* **Responsive Columns**
 * **Load More button**
 * **Customize Colors**
 * Premium Support
@@ -100,6 +101,12 @@ You can report security bugs through the Patchstack Vulnerability Disclosure Pro
 
 
 == Changelog ==
+
+= 2.2.10 =
+* Minor bug fixes
+
+= 2.2.9 =
+* Minor fixes
 
 = 2.2.8 =
 * Improvements to the plugin performance

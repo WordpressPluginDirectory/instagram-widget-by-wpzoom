@@ -310,6 +310,7 @@ class Wpzoom_Instagram_Widget_Display {
 				$show_user_name = isset( $args['show-account-username'] ) && boolval( $args['show-account-username'] );
 				$show_user_badge = $this->is_pro && isset( $args['show-account-badge'] ) && boolval( $args['show-account-badge'] );
                 $show_user_stats = $this->is_pro && isset( $args['show-account-stats'] ) && boolval( $args['show-account-stats'] );
+				$show_stories = $this->is_pro && ( ! isset( $args['show-stories'] ) || boolval( $args['show-stories'] ) );
 				$user_name = get_the_title( $user );
 				$user_name = preg_replace( '/[\x{200B}-\x{200D}\x{FEFF}]/u', '', $user_name );
 				$user_name_display = sprintf( '@%s', $user_name );
@@ -479,8 +480,61 @@ class Wpzoom_Instagram_Widget_Display {
 							}
 
 							if ( $show_user_image && ! empty( $user_image ) ) {
-								$output .= '<div class="zoom-instagram-widget__header-column-left">';
-								$output .= '<img src="' . esc_url( $user_image ) . '" alt="' . esc_attr( $user_name_display ) . '" width="70"/>';
+								// Stories feature is only available in Pro version and when enabled in feed settings
+								$stories = array();
+								$has_stories = false;
+								$story_ring_class = '';
+
+								if ( $show_stories ) {
+									// Get stories in a single API call (has_stories now uses cached data from get_stories)
+									$stories = $this->api->get_stories( $user_business_page_id, $user_account_token );
+									$has_stories = ! empty( $stories );
+									$story_ring_class = $has_stories ? ' has-stories' : '';
+								}
+
+								$output .= '<div class="zoom-instagram-widget__header-column-left' . esc_attr( $story_ring_class ) . '">';
+
+								if ( $has_stories ) {
+									// Build Zuck.js compatible data structure
+									$stories_data = array(
+										'id'          => 'wpz-insta-' . $user_business_page_id,
+										'photo'       => $user_image,
+										'name'        => $user_name_display,
+										'link'        => $user_link,
+										'lastUpdated' => time(),
+										'items'       => array(),
+									);
+
+									foreach ( $stories as $story ) {
+										$is_video = isset( $story->media_type ) && 'VIDEO' === $story->media_type;
+										$stories_data['items'][] = array(
+											'id'       => isset( $story->id ) ? $story->id : uniqid( 'story-' ),
+											'type'     => $is_video ? 'video' : 'photo',
+											'src'      => $story->media_url,
+											'preview'  => $is_video && ! empty( $story->thumbnail_url ) ? $story->thumbnail_url : $story->media_url,
+											'length'   => $is_video ? 0 : 5, // 0 = use video duration, 5 = 5 seconds for images
+											'link'     => isset( $story->permalink ) ? $story->permalink : '',
+											'linkText' => __( 'View on Instagram', 'instagram-widget-by-wpzoom' ),
+											'time'     => isset( $story->timestamp ) ? strtotime( $story->timestamp ) : time(),
+										);
+									}
+
+									// Add aria-label for accessibility
+									$aria_label = sprintf(
+										/* translators: %s: username */
+										esc_attr__( '%s has stories available. Click to view.', 'instagram-widget-by-wpzoom' ),
+										$user_name_display
+									);
+
+									// Output clickable image with Zuck.js data
+									$output .= '<div class="wpz-insta-stories" data-stories="' . esc_attr( wp_json_encode( $stories_data ) ) . '" aria-label="' . $aria_label . '" role="button" tabindex="0">';
+									$output .= '<img src="' . esc_url( $user_image ) . '" alt="' . esc_attr( $user_name_display ) . '" width="70" />';
+									$output .= '</div>';
+								} else {
+									// No stories - just show the image
+									$output .= '<img src="' . esc_url( $user_image ) . '" alt="' . esc_attr( $user_name_display ) . '" width="70" />';
+								}
+
 								$output .= '</div>';
 							}
 

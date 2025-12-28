@@ -51,6 +51,7 @@ class WPZOOM_Instagram_Widget_Settings {
 		'show-account-username'           => array( 'type' => 'boolean', 'default' => true ),
 		'show-account-badge'              => array( 'type' => 'boolean', 'default' => false ),
 		'show-account-stats'              => array( 'type' => 'boolean', 'default' => true ),
+		'show-stories'                    => array( 'type' => 'boolean', 'default' => true ),
 		'show-account-image'              => array( 'type' => 'boolean', 'default' => true ),
 		'show-account-bio'                => array( 'type' => 'boolean', 'default' => true ),
 		'show-view-button'                => array( 'type' => 'boolean', 'default' => true ),
@@ -349,6 +350,7 @@ class WPZOOM_Instagram_Widget_Settings {
 		add_action( 'quick_edit_custom_box', array( $this, 'user_quick_edit_box' ), 10, 3 );
 		add_action( 'post_action_wpz-insta_duplicate-feed', array( $this, 'post_action_duplicate_feed' ) );
 		add_action( 'post_action_wpz-insta_update-posts', array( $this, 'post_action_update_posts' ) );
+		add_action( 'post_action_wpz-insta_update-stories', array( $this, 'post_action_update_stories' ) );
 		add_action( 'post_edit_form_tag', array( $this, 'post_edit_form_tag' ) );
 
 		add_action( 'in_admin_header', function() {
@@ -476,6 +478,16 @@ class WPZOOM_Instagram_Widget_Settings {
 				'<div class="notice notice-%s inline is-dismissible"><p>%s</p></div>',
 				( $success ? 'success' : 'error' ),
 				( $success ? __( 'Feed posts updated.', 'instagram-widget-by-wpzoom' ) : __( 'There was an error updating the posts for the selected feed.', 'instagram-widget-by-wpzoom' ) )
+			);
+		}
+
+		if ( 'edit' == $screen->base && 'wpz-insta_feed' == $screen->post_type && isset( $_GET['wpz-insta_update-stories'] ) ) {
+			$success = 'true' === $_GET['wpz-insta_update-stories'];
+
+			printf(
+				'<div class="notice notice-%s inline is-dismissible"><p>%s</p></div>',
+				( $success ? 'success' : 'error' ),
+				( $success ? __( 'Stories cache cleared.', 'instagram-widget-by-wpzoom' ) : __( 'There was an error clearing the stories cache.', 'instagram-widget-by-wpzoom' ) )
 			);
 		}
 
@@ -865,6 +877,15 @@ class WPZOOM_Instagram_Widget_Settings {
 				// Clear all transients for this feed (including video variants)
 				$this->clear_feed_transients( $post_id, true );
 
+				// Also clear stories cache for the associated user
+				$user_id = intval( get_post_meta( $post_id, '_wpz-insta_user-id', true ) );
+				if ( $user_id > 0 ) {
+					$page_id = get_post_meta( $user_id, '_wpz-insta_page_id', true );
+					if ( ! empty( $page_id ) ) {
+						delete_transient( 'wpz-insta_stories_' . $page_id );
+					}
+				}
+
 				wp_redirect(
 					add_query_arg(
 						array(
@@ -883,6 +904,50 @@ class WPZOOM_Instagram_Widget_Settings {
 				array(
 					'post_type' => 'wpz-insta_feed',
 					'wpz-insta_update-posts' => 'false',
+				),
+				admin_url( 'edit.php' )
+			)
+		);
+		exit;
+	}
+
+	/**
+	 * Handle the "Update Stories" action - clears only the stories cache.
+	 */
+	function post_action_update_stories( int $post_id ) {
+
+		if ( $post_id > 0 && isset( $_GET['_wpnonce'] ) && wp_verify_nonce( $_GET['_wpnonce'], 'wpz-insta-update-stories_' . $post_id ) ) {
+			$post = get_post( $post_id );
+
+			if ( $post instanceof WP_Post ) {
+
+				// Clear stories cache for the associated user
+				$user_id = intval( get_post_meta( $post_id, '_wpz-insta_user-id', true ) );
+				if ( $user_id > 0 ) {
+					$page_id = get_post_meta( $user_id, '_wpz-insta_page_id', true );
+					if ( ! empty( $page_id ) ) {
+						delete_transient( 'wpz-insta_stories_' . $page_id );
+					}
+				}
+
+				wp_redirect(
+					add_query_arg(
+						array(
+							'post_type' => 'wpz-insta_feed',
+							'wpz-insta_update-stories' => 'true',
+						),
+						admin_url( 'edit.php' )
+					)
+				);
+				exit;
+			}
+		}
+
+		wp_redirect(
+			add_query_arg(
+				array(
+					'post_type' => 'wpz-insta_feed',
+					'wpz-insta_update-stories' => 'false',
 				),
 				admin_url( 'edit.php' )
 			)
@@ -918,6 +983,15 @@ class WPZOOM_Instagram_Widget_Settings {
 						<?php if ( current_user_can( 'edit_post', $post_id ) ) { ?>
 							<li class="wpz-insta_actions-menu_divider"></li>
 							<li class="wpz-insta_actions-menu_update-posts"><a href="<?php echo esc_url( wp_nonce_url( admin_url( 'post.php?post=' . $post_id . '&action=wpz-insta_update-posts' ), 'wpz-insta-update-posts_' . $post_id ) ); ?>"><?php _e( 'Update posts', 'instagram-widget-by-wpzoom' ); ?></a></li>
+							<?php
+							// Show "Update Stories" only if stories are enabled and account is connected via Facebook
+							$show_stories = get_post_meta( $post_id, '_wpz-insta_show-stories', true );
+							$user_id = intval( get_post_meta( $post_id, '_wpz-insta_user-id', true ) );
+							$page_id = $user_id > 0 ? get_post_meta( $user_id, '_wpz-insta_page_id', true ) : '';
+							if ( $show_stories && ! empty( $page_id ) ) :
+							?>
+							<li class="wpz-insta_actions-menu_update-stories"><a href="<?php echo esc_url( wp_nonce_url( admin_url( 'post.php?post=' . $post_id . '&action=wpz-insta_update-stories' ), 'wpz-insta-update-stories_' . $post_id ) ); ?>"><?php _e( 'Update Stories', 'instagram-widget-by-wpzoom' ); ?></a></li>
+							<?php endif; ?>
 						<?php } ?>
 						<li class="wpz-insta_actions-menu_divider"></li>
 						<?php if ( current_user_can( 'delete_post', $post_id ) ) { ?><li class="wpz-insta_actions-menu_delete wpz-insta_actions-menu_delete-feed"><a href="<?php echo esc_url( get_delete_post_link( $post_id, '', true ) ); ?>"><?php _e( 'Delete feed', 'instagram-widget-by-wpzoom' ); ?></a></li><?php } ?>
@@ -1236,6 +1310,7 @@ class WPZOOM_Instagram_Widget_Settings {
 			$user_edit_link                   = $user instanceof WP_Post ? admin_url( 'edit.php?post_type=wpz-insta_user#post-' . $user_id ) : '';
 			$user_display_name                = $user instanceof WP_Post ? sprintf( '@%s', get_the_title( $user ) ) : $none_label;
 			$user_account_type                = $user instanceof WP_Post ? ucwords( strtolower( get_post_meta( $user_id, '_wpz-insta_account-type', true ) ?: $none_label ) ) : $none_label;
+			$user_has_facebook_connection     = $user instanceof WP_Post ? ! empty( get_post_meta( $user_id, '_wpz-insta_page_id', true ) ) : false;
 			$raw_token                        = get_post_meta( $user_id, '_wpz-insta_token', true );
 			$user_account_token               = $user instanceof WP_Post ? ( false !== $raw_token && ! empty( $raw_token ) ? $raw_token : '-1' ) : '-1';
 			$new_posts_interval_number        = (int) self::get_feed_setting_value( $post->ID, 'check-new-posts-interval-number' );
@@ -1260,6 +1335,7 @@ class WPZOOM_Instagram_Widget_Settings {
 			$show_account_username            = (bool) self::get_feed_setting_value( $post->ID, 'show-account-username' );
 			$show_account_badge               = (bool) self::get_feed_setting_value( $post->ID, 'show-account-badge' );
 			$show_account_stats               = (bool) self::get_feed_setting_value( $post->ID, 'show-account-stats' );
+			$show_stories                     = (bool) self::get_feed_setting_value( $post->ID, 'show-stories' );
 			$show_account_image               = (bool) self::get_feed_setting_value( $post->ID, 'show-account-image' );
 			$show_account_bio                 = (bool) self::get_feed_setting_value( $post->ID, 'show-account-bio' );
 			$show_view_instagram_button       = (bool) self::get_feed_setting_value( $post->ID, 'show-view-button' );
@@ -1623,6 +1699,16 @@ class WPZOOM_Instagram_Widget_Settings {
                                                 <?php esc_html_e( 'Display following count', 'instagram-widget-by-wpzoom' ); ?>
 
                                                 <small class="help" aria-hidden="true" data-tooltip="<?php esc_html_e( 'This feature works only when your account is connected via your Facebook Page.', 'instagram-widget-by-wpzoom' ); ?>"><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='16' height='16'><path fill='#000' fill-rule='evenodd' clip-rule='evenodd' d='M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm-1 16v-2h2v2h-2zm2-3v-1.141A3.991 3.991 0 0016 10a4 4 0 00-8 0h2c0-1.103.897-2 2-2s2 .897 2 2-.897 2-2 2a1 1 0 00-1 1v2h2z'></path></svg></small>
+                                            </span>
+										</label>
+
+										<label class="wpz-insta_table-row<?php echo ! $user_has_facebook_connection ? ' wpz-insta_disabled' : ''; ?>">
+											<input type="hidden" name="_wpz-insta_show-stories" value="0" />
+											<input type="checkbox" name="_wpz-insta_show-stories" value="1"<?php checked( $show_stories ); ?><?php disabled( ! $user_has_facebook_connection ); ?> />
+											<span>
+                                                <?php esc_html_e( 'Display Instagram Stories', 'instagram-widget-by-wpzoom' ); ?>
+
+                                                <small class="help" aria-hidden="true" data-tooltip="<?php esc_html_e( 'Shows a clickable stories ring around the profile image when the account has active stories. This feature works only when your account is connected via your Facebook Page.', 'instagram-widget-by-wpzoom' ); ?>"><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='16' height='16'><path fill='#000' fill-rule='evenodd' clip-rule='evenodd' d='M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm-1 16v-2h2v2h-2zm2-3v-1.141A3.991 3.991 0 0016 10a4 4 0 00-8 0h2c0-1.103.897-2 2-2s2 .897 2 2-.897 2-2 2a1 1 0 00-1 1v2h2z'></path></svg></small>
                                             </span>
 										</label>
 									<?php echo $pro_toggle ? '</fieldset>' : ''; ?>
@@ -2022,9 +2108,10 @@ class WPZOOM_Instagram_Widget_Settings {
 							$user_type = ucwords( strtolower( esc_html( get_post_meta( $user_id, '_wpz-insta_account-type', true ) ?: $none_label ) ) );
 							$raw_token = get_post_meta( $user_id, '_wpz-insta_token', true );
 							$user_token = sanitize_text_field( false !== $raw_token && ! empty( $raw_token ) ? $raw_token : '-1' );
+							$user_has_page_id = ! empty( get_post_meta( $user_id, '_wpz-insta_page_id', true ) );
 
 							?>
-							<li data-user-id="<?php echo esc_attr( $user_id ); ?>" data-user-name="<?php echo esc_attr( $user_name ); ?>" data-user-type="<?php echo esc_attr( $user_type ); ?>" data-user-token="<?php echo esc_attr( $user_token ); ?>">
+							<li data-user-id="<?php echo esc_attr( $user_id ); ?>" data-user-name="<?php echo esc_attr( $user_name ); ?>" data-user-type="<?php echo esc_attr( $user_type ); ?>" data-user-token="<?php echo esc_attr( $user_token ); ?>" data-has-page-id="<?php echo $user_has_page_id ? '1' : '0'; ?>">
 								<h3><?php echo $user_name; ?></h3>
 								<p><?php echo $user_type; ?></p>
 							</li>
@@ -2080,6 +2167,11 @@ class WPZOOM_Instagram_Widget_Settings {
 	}
 
 	function replace_preview_content( $output ) {
+		// Return early if output is empty to avoid DOMDocument error
+		if ( empty( $output ) ) {
+			return $output;
+		}
+
 		try {
 			require_once( plugin_dir_path( __FILE__ ) . 'vendor/autoload.php' );
 
@@ -3327,7 +3419,7 @@ class WPZOOM_Instagram_Widget_Settings {
 					<?php
 					printf(
 						__( 'Instagram Widget <small>by <a href="%s" target="_blank" title="WPZOOM - WordPress themes with modern features and professional support">WPZOOM</a></small>', 'instagram-widget-by-wpzoom' ),
-						esc_url( 'https://wpzoom.com' )
+						esc_url( 'https://www.wpzoom.com' )
 					);
 					?>
 				</h1>
@@ -3343,13 +3435,14 @@ class WPZOOM_Instagram_Widget_Settings {
 
 					<!--// Connect Bussines Account-->
 					<div class="account-option account-option_business">
-						<h4 class="account-option-title"><span class="dashicons dashicons-facebook"></span> <?php esc_html_e( 'Connect via Facebook Page', 'instagram-widget-by-wpzoom' ); ?></h4>
+						<h4 class="account-option-title"><span class="dashicons dashicons-facebook-alt"></span> <?php esc_html_e( 'Connect via Facebook Page', 'instagram-widget-by-wpzoom' ); ?> <span class="recommended-badge"><?php esc_html_e( 'Recommended', 'instagram-widget-by-wpzoom' ); ?></span></h4>
 
 						<ul class="account-option-checklist">
 							<li><?php _e( 'Works with Instagram Creator or Business accounts ', 'instagram-widget-by-wpzoom' ); ?></li>
 							<li><?php _e( 'Show posts from your account', 'instagram-widget-by-wpzoom' ); ?></li>
                             <li><?php _e( 'Display user info in the header', 'instagram-widget-by-wpzoom' ); ?></li>
                             <li><strong><?php _e( '[PRO] Display Follower Count', 'instagram-widget-by-wpzoom' ); ?></strong></li>
+                            <li><strong><?php _e( '[PRO] Display Instagram Stories', 'instagram-widget-by-wpzoom' ); ?></strong></li>
 							<li class="no-feature"><?php _e( 'Display hashtag feeds <small><em>Coming Soon</em></small>', 'instagram-widget-by-wpzoom' ); ?></li>
                             <li class="no-feature"><?php _e( 'Display feeds with your mention <small><em>Coming Soon</em></small>', 'instagram-widget-by-wpzoom' ); ?></li>
 						</ul>
@@ -3371,10 +3464,10 @@ class WPZOOM_Instagram_Widget_Settings {
                             <li><?php _e( 'Display user info in the header', 'instagram-widget-by-wpzoom' ); ?></li>
                             <li><strong><?php _e( 'Does not require a Facebook page', 'instagram-widget-by-wpzoom' ); ?></strong></li>
                             <li class="x-feature"><?php _e( '[PRO] Display Follower Count', 'instagram-widget-by-wpzoom' ); ?></li>
-
+                            <li class="x-feature"><?php _e( '[PRO] Display Instagram Stories', 'instagram-widget-by-wpzoom' ); ?></li>
                         </ul>
 
-                        <note><?php esc_html_e( 'If the connection fails, please generate a new API token manually and enter it in the field Instagram API Access Token at the bottom of this page.', 'instagram-widget-by-wpzoom' ); ?></note>
+                        <note><?php esc_html_e( 'If the connection fails, please generate a new API token manually and enter it in the field Instagram API Access Token at the bottom of this page.', 'instagram-widget-by-wpzoom' ); ?></note><br/>
                         <a href="<?php echo esc_url( $oauth_url ); ?>" id="wpz-insta_connect-personal" class="button button-primary account-option-button">
                             <svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
                                 <path d="M15.9582 4.70406C15.9208 3.85391 15.7833 3.26945 15.5863 2.763C15.3832 2.22542 15.0706 1.74412 14.6611 1.34402C14.261 0.937686 13.7765 0.62195 13.2452 0.421959C12.7358 0.22502 12.1544 0.0875418 11.3042 0.0500587C10.4478 0.00940127 10.1758 0 8.00354 0C5.83123 0 5.55933 0.00940127 4.70601 0.0468843C3.85587 0.0843673 3.2714 0.221968 2.76507 0.418784C2.22737 0.62195 1.74607 0.934512 1.34597 1.34402C0.939639 1.74412 0.624025 2.22859 0.423912 2.75995C0.226973 3.26945 0.0894949 3.85074 0.0520119 4.70088C0.0113544 5.55738 0.00195312 5.82928 0.00195312 8.00159C0.00195312 10.1739 0.0113544 10.4458 0.0488374 11.2991C0.0863205 12.1493 0.223921 12.7337 0.420859 13.2402C0.624025 13.7778 0.939639 14.2591 1.34597 14.6592C1.74607 15.0655 2.23054 15.3812 2.7619 15.5812C3.2714 15.7782 3.85269 15.9156 4.70296 15.9531C5.55616 15.9907 5.82818 16 8.00049 16C10.1728 16 10.4447 15.9907 11.298 15.9531C12.1482 15.9156 12.7326 15.7782 13.239 15.5812C14.3142 15.1655 15.1644 14.3153 15.5801 13.2402C15.7769 12.7307 15.9145 12.1493 15.952 11.2991C15.9895 10.4458 15.9989 10.1739 15.9989 8.00159C15.9989 5.82928 15.9957 5.55738 15.9582 4.70406ZM14.5174 11.2366C14.483 12.018 14.3517 12.44 14.2423 12.7213C13.9735 13.4183 13.4203 13.9715 12.7232 14.2404C12.4419 14.3498 12.0169 14.481 11.2386 14.5153C10.3946 14.5529 10.1415 14.5622 8.00671 14.5622C5.87189 14.5622 5.61562 14.5529 4.77475 14.5153C3.99335 14.481 3.57139 14.3498 3.29008 14.2404C2.94321 14.1122 2.62747 13.909 2.3712 13.6433C2.10552 13.3839 1.90235 13.0713 1.77416 12.7244C1.66476 12.4431 1.53351 12.018 1.4992 11.2398C1.46159 10.3959 1.45231 10.1426 1.45231 8.00781C1.45231 5.87299 1.46159 5.61671 1.4992 4.77597C1.53351 3.99457 1.66476 3.57261 1.77416 3.2913C1.90235 2.94431 2.10552 2.6287 2.37437 2.3723C2.6337 2.10662 2.94626 1.90345 3.29326 1.77538C3.57456 1.66598 3.99969 1.53473 4.77792 1.5003C5.62184 1.46281 5.87507 1.45341 8.00977 1.45341C10.1478 1.45341 10.4009 1.46281 11.2417 1.5003C12.0231 1.53473 12.4451 1.66598 12.7264 1.77538C13.0733 1.90345 13.389 2.10662 13.6453 2.3723C13.911 2.63175 14.1141 2.94431 14.2423 3.2913C14.3517 3.57261 14.483 3.99762 14.5174 4.77597C14.5549 5.61989 14.5643 5.87299 14.5643 8.00781C14.5643 10.1426 14.5549 10.3927 14.5174 11.2366Z" fill="#fff" />
@@ -3397,6 +3490,9 @@ class WPZOOM_Instagram_Widget_Settings {
 
                                     <h4 class="account-option-title"><span class="dashicons dashicons-facebook"></span> <?php _e( 'Facebook API Access Token', 'instagram-widget-by-wpzoom' ); ?></h4>
 
+                                    <p>&rarr; <a href="https://www.wpzoom.com/graph-auth/" target="_blank"><?php _e( 'Generate Access Token via Facebook', 'instagram-widget-by-wpzoom' ); ?></a></p>
+
+
         						<!--// Graph API Input Token -->
         						<input type="password" autocomplete="off" id="wpz-insta_account-token-input" name="wpz-insta_account-token-input" value="<?php echo isset( $settings['basic-access-token'] ) && ! empty( $settings['basic-access-token'] ) ? esc_attr( $settings['basic-access-token'] ) : ''; ?>" class="account-option-token-input" placeholder="<?php _e( 'Enter your Facebook access token', 'instagram-widget-by-wpzoom' ); ?>" />
                                 <br/>
@@ -3405,7 +3501,6 @@ class WPZOOM_Instagram_Widget_Settings {
         							<?php _e( 'Connect with Access Token', 'instagram-widget-by-wpzoom' ); ?>
         						</button>
 
-                                <p>&rarr; <a href="https://www.wpzoom.com/graph-auth/" target="_blank"><?php _e( 'Generate Access Token via Facebook', 'instagram-widget-by-wpzoom' ); ?></a></p>
 
 
                             </div>
@@ -3413,6 +3508,9 @@ class WPZOOM_Instagram_Widget_Settings {
                             <div class="token_col">
 
                                 <h4 class="account-option-title"><span class="dashicons dashicons-instagram"></span> <?php _e( 'Instagram API Access Token', 'instagram-widget-by-wpzoom' ); ?></h4>
+
+                                <p>&rarr; <a href="https://www.wpzoom.com/instagram-business-auth/" target="_blank"><?php _e( 'Generate Access Token via Instagram', 'instagram-widget-by-wpzoom' ); ?></a></p>
+
 
         						<!--// Instagram Business Login Input Token -->
         						<input type="password" autocomplete="off" id="wpz-insta_biz_account-token-input" name="wpz-insta-biz_account-token-input" value="<?php echo isset( $settings['basic-access-token'] ) && ! empty( $settings['basic-access-token'] ) ? esc_attr( $settings['basic-access-token'] ) : ''; ?>" class="account-option-token-input" placeholder="<?php _e( 'Enter your Business Instagram access token', 'instagram-widget-by-wpzoom' ); ?>" />
@@ -3426,7 +3524,6 @@ class WPZOOM_Instagram_Widget_Settings {
         							<?php _e( 'Connect with Access Token', 'instagram-widget-by-wpzoom' ); ?>
         						</button>
 
-                                <p>&rarr; <a href="https://www.wpzoom.com/instagram-business-auth/" target="_blank"><?php _e( 'Generate Access Token via Instagram', 'instagram-widget-by-wpzoom' ); ?></a></p>
 
                             </div>
 
