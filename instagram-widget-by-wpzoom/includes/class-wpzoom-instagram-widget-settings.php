@@ -30,6 +30,9 @@ class WPZOOM_Instagram_Widget_Settings {
 	 */
 	public static $feed_settings = array(
 		'user-id'                         => array( 'type' => 'integer', 'default' => -1 ),
+		'user-ids'                        => array( 'type' => 'string',  'default' => '' ), // Comma-separated list of user IDs for multi-account feeds (PRO)
+		'multi-account-header-mode'       => array( 'type' => 'string',  'default' => 'all' ), // primary, hide, all (PRO)
+		'multi-account-show-attribution'  => array( 'type' => 'boolean', 'default' => false ), // Show account badge on each post (PRO)
 		'check-new-posts-interval-number' => array( 'type' => 'integer', 'default' => 1 ),
 		'check-new-posts-interval-suffix' => array( 'type' => 'integer', 'default' => 2 ),
 		'enable-request-timeout'          => array( 'type' => 'boolean', 'default' => false ),
@@ -69,6 +72,7 @@ class WPZOOM_Instagram_Widget_Settings {
 		'image-width-suffix'              => array( 'type' => 'integer', 'default' => 0 ),
 		'show-overlay'                    => array( 'type' => 'boolean', 'default' => true ),
 		'lazy-load'                       => array( 'type' => 'boolean', 'default' => true ),
+		'ajax-initial-load'               => array( 'type' => 'boolean', 'default' => false ),
 		'lightbox'                        => array( 'type' => 'boolean', 'default' => true ),
 		'allowed-post-types'              => array( 'type' => 'string',  'default' => 'IMAGE,VIDEO,CAROUSEL_ALBUM' ),
 		'image-aspect-ratio'              => array( 'type' => 'string',  'default' => 'square' ),
@@ -386,8 +390,8 @@ class WPZOOM_Instagram_Widget_Settings {
 		} );
 
 		add_action( 'admin_init', function() {
-			if ( isset( $_POST['action'] ) && 'dismiss-wp-pointer' == $_POST['action'] ) {
-				update_user_meta( get_current_user_id(), 'wpzinsta-settings-pointer-dismissed', $_POST['pointer'], true );
+			if ( isset( $_POST['action'] ) && 'dismiss-wp-pointer' == $_POST['action'] && isset( $_POST['pointer'] ) ) {
+				update_user_meta( get_current_user_id(), 'wpzinsta-settings-pointer-dismissed', sanitize_text_field( $_POST['pointer'] ), true );
 			}
 		} );
 
@@ -432,6 +436,7 @@ class WPZOOM_Instagram_Widget_Settings {
 						'instagram_page_wpzoom-instagram-users',
 						'wpz-insta_feed_page_wpz-insta_settings',
 						'wpz-insta_feed_page_wpzoom-instagram-support',
+						'wpz-insta_feed_page_wpzoom-instagram-insights',
 						'settings_page_wpz-insta-connect',
 						'wpz-insta_feed_page_wpz-insta-connect',
 					)
@@ -451,7 +456,7 @@ class WPZOOM_Instagram_Widget_Settings {
 
 		wp_enqueue_script(
 			'zoom-instagram-widget-cron-dismiss',
-			plugin_dir_url( dirname( __FILE__ ) . '/instagram-widget-by-wpzoom.php' ) . 'dist/scripts/backend/cron-dismiss.js',
+			WPZOOM_INSTAGRAM_PLUGIN_URL . 'dist/scripts/backend/cron-dismiss.js',
 			array( 'jquery' ),
 			WPZOOM_INSTAGRAM_VERSION,
 			true
@@ -569,7 +574,7 @@ class WPZOOM_Instagram_Widget_Settings {
 	}
 
 	function set_custom_edit_columns_feed( $columns ) {
-		unset( $columns['cb'], $columns['date'] );
+		unset( $columns['cb'], $columns['date'], $columns['rocket_insights'] );
 
 		$columns['wpz-insta_account'] = __( 'Show posts from', 'instagram-widget-by-wpzoom' );
 		$columns['wpz-insta_actions'] = __( 'Actions', 'instagram-widget-by-wpzoom' );
@@ -578,7 +583,7 @@ class WPZOOM_Instagram_Widget_Settings {
 	}
 
 	function set_custom_edit_columns_user( $columns ) {
-		unset( $columns['cb'], $columns['title'], $columns['date'] );
+		unset( $columns['cb'], $columns['title'], $columns['date'], $columns['rocket_insights'] );
 
 		$columns['wpz-insta_account-username'] = __( 'Username', 'instagram-widget-by-wpzoom' );
 		$columns['wpz-insta_account-type'] = __( 'Type', 'instagram-widget-by-wpzoom' );
@@ -735,7 +740,7 @@ class WPZOOM_Instagram_Widget_Settings {
 
 				case 'wpz-insta_account-photo' :
 					$photo_id = get_post_thumbnail_id( get_the_ID() ) ?: -1;
-					$photo_url = get_the_post_thumbnail_url( get_the_ID(), array( 100, 100 ) ) ?: plugins_url( '/dist/images/backend/icon-insta.png', __FILE__ );
+					$photo_url = get_the_post_thumbnail_url( get_the_ID(), array( 100, 100 ) ) ?: WPZOOM_INSTAGRAM_PLUGIN_URL . 'dist/images/backend/icon-insta.png';
 
 					?><div class="wpz-insta_quick-edit"><ul class="wpz-insta_quick-edit-columns">
 					<li class="wpz-insta_account-photo-wrapper">
@@ -1023,13 +1028,27 @@ class WPZOOM_Instagram_Widget_Settings {
 				break;
 
 			case 'wpz-insta_account-feeds' :
-				$latest_feeds = get_posts( array( 'numberposts' => 1, 'post_status' => 'publish', 'post_type' => 'wpz-insta_feed', 'meta_key' => '_wpz-insta_user-id', 'meta_value' => $post_id ) );
-				$latest_feed = ! empty( $latest_feeds ) && is_array( $latest_feeds ) && $latest_feeds[0] instanceof WP_Post ? $latest_feeds[0]->ID : -1;
+				// Get all feeds where this account is the primary user.
+				$feeds = get_posts( array(
+					'numberposts' => -1,
+					'post_status' => 'publish',
+					'post_type'   => 'wpz-insta_feed',
+					'meta_key'    => '_wpz-insta_user-id',
+					'meta_value'  => $post_id,
+				) );
 
-				if ( $latest_feed > 0 ) {
-					echo '<a href="' . esc_url( get_edit_post_link( $latest_feed ) ) . '">' . get_the_title( $latest_feed ) . '</a>';
+				$feed_links = array();
+				foreach ( $feeds as $feed ) {
+					$feed_links[] = '<a href="' . esc_url( get_edit_post_link( $feed->ID ) ) . '">' . esc_html( get_the_title( $feed ) ) . '</a>';
+				}
+
+				// Allow PRO plugin to add feeds where this account is an additional user.
+				$feed_links = apply_filters( 'wpz-insta_account-feeds-column', $feed_links, $post_id );
+
+				if ( ! empty( $feed_links ) ) {
+					echo implode( ', ', $feed_links );
 				} else {
-					echo __( 'None', 'instagram-widget-by-wpzoom' );
+					echo esc_html__( 'None', 'instagram-widget-by-wpzoom' );
 				}
 
 				break;
@@ -1074,7 +1093,7 @@ class WPZOOM_Instagram_Widget_Settings {
 			$token = get_post_meta( $post_id, '_wpz-insta_token', true );
 			$token_expire = $this->get_token_expire_display( $post_id );
 			$photo_id = get_post_thumbnail_id( $post_id ) ?: -1;
-			$photo_url = get_the_post_thumbnail_url( $post_id, array( 100, 100 ) ) ?: plugins_url( '/dist/images/backend/icon-insta.png', __FILE__ );
+			$photo_url = get_the_post_thumbnail_url( $post_id, array( 100, 100 ) ) ?: WPZOOM_INSTAGRAM_PLUGIN_URL . 'dist/images/backend/icon-insta.png';
 			$user_name = sanitize_text_field( get_post_meta( $post_id, '_wpz-insta_user_name', true ) );
 			$bio = get_the_content();
 			$api_url  = get_post_meta( $post_id, '_wpz-insta_page_id', true ) ? $this->get_facebook_graph_api_url() : $this->get_instagram_business_api_url();
@@ -1166,7 +1185,7 @@ class WPZOOM_Instagram_Widget_Settings {
 			<header class="wpz-insta-wrap wpz-insta-wrap-sides wpz-insta_settings-header">
 				<div class="wpz-insta-wrap-left">
 					<h1 class="wpz-insta_settings-main-title wp-heading">
-						<input type="text" name="post_title" size="30" value="<?php echo esc_attr( ! empty( $feed_title ) ? $feed_title : __( 'Feed Title', 'instagram-widget-by-wpzoom' ) ); ?>" id="title" spellcheck="true" autocomplete="off" />
+						<input type="text" name="post_title" size="30" value="<?php echo esc_attr( ! empty( $feed_title ) ? $feed_title : sprintf( __( 'Instagram Feed #%d', 'instagram-widget-by-wpzoom' ), $post->ID ) ); ?>" id="title" spellcheck="true" autocomplete="off" />
 					</h1>
 
 					<nav class="wpz-insta_settings-main-nav wpz-insta_feed-edit-nav">
@@ -1353,6 +1372,7 @@ class WPZOOM_Instagram_Widget_Settings {
 			$image_aspect_ratio               = (string) self::get_feed_setting_value( $post->ID, 'image-aspect-ratio' );
 			$show_overlay                     = (bool) self::get_feed_setting_value( $post->ID, 'show-overlay' );
 			$lazy_load                        = (bool) self::get_feed_setting_value( $post->ID, 'lazy-load' );
+			$ajax_initial_load                = (bool) self::get_feed_setting_value( $post->ID, 'ajax-initial-load' );
 			$show_media_type_icons            = (bool) self::get_feed_setting_value( $post->ID, 'show-media-type-icons' );
 			$image_size                       = (string) self::get_feed_setting_value( $post->ID, 'image-size' );
 			$image_width                      = (float) self::get_feed_setting_value( $post->ID, 'image-width' );
@@ -1401,6 +1421,19 @@ class WPZOOM_Instagram_Widget_Settings {
 											<div id="wpz-insta_feed-user-remove-btn" class="wpz-insta_feed-user-remove-button button button-secondary"><?php esc_html_e( 'Remove', 'instagram-widget-by-wpzoom' ); ?></div>
 										</div>
 
+										<?php
+										/**
+										 * Action hook for PRO to render additional accounts inside the account selector.
+										 *
+										 * @since 2.2.13
+										 * @param int      $feed_id    The feed ID.
+										 * @param int      $user_id    The primary user ID.
+										 * @param WP_Post  $user       The primary user object.
+										 * @param array    $all_users  All available user accounts.
+										 */
+										do_action( 'wpz-insta_feed-settings-additional-accounts', $post->ID, $user_id, $user, $all_users );
+										?>
+
 										<div class="wpz-insta_feed-user-select-button-wrap">
 											<div class="wpz-insta_feed-user-select-button-highlight"></div>
 											<div id="wpz-insta_feed-user-select-btn" class="wpz-insta_feed-user-select-button button button-primary"><?php esc_html_e( 'Select an Account', 'instagram-widget-by-wpzoom' ); ?></div>
@@ -1410,6 +1443,36 @@ class WPZOOM_Instagram_Widget_Settings {
 									<a href="<?php echo esc_url( $user_edit_link ); ?>" target="_blank" class="wpz-insta_feed-user-select-edit-link"><?php esc_html_e( 'Edit account details', 'instagram-widget-by-wpzoom' ); ?></a>
 								</div>
 							</div>
+
+							<?php
+							/**
+							 * Action hook for PRO multi-account settings section.
+							 *
+							 * @since 2.3.0
+							 * @param int      $feed_id    The feed ID.
+							 * @param int      $user_id    The primary user ID.
+							 * @param WP_Post  $user       The primary user object.
+							 * @param array    $all_users  All available user accounts.
+							 * @param bool     $pro_toggle Whether PRO options toggle is shown.
+							 */
+							do_action( 'wpz-insta_feed-settings-after-account', $post->ID, $user_id, $user, $all_users, $pro_toggle );
+
+							// Show multi-account placeholder when PRO is not active
+							if ( $pro_toggle && count( $all_users ) > 1 ) :
+							?>
+							<div class="wpz-insta_sidebar-section wpz-insta_sidebar-section-multi-account-promo<?php echo $user instanceof WP_Post ? ' active' : ''; ?>">
+								<div class="wpz-insta_add-another-account-wrap wpz-insta_pro-only-feature">
+									<button type="button" class="wpz-insta_add-another-account-btn-placeholder" disabled>
+										<span class="dashicons dashicons-plus-alt2"></span>
+										<?php esc_html_e( 'Add another account', 'instagram-widget-by-wpzoom' ); ?>
+										<span class="wpz-insta-pro-badge"><?php esc_html_e( 'PRO', 'instagram-widget-by-wpzoom' ); ?></span>
+									</button>
+									<p class="wpz-insta_add-another-account-description"><?php esc_html_e( 'Combine posts from multiple Instagram accounts into a single feed.', 'instagram-widget-by-wpzoom' ); ?></p>
+								</div>
+							</div>
+							<?php
+							endif;
+							?>
 
 							<div class="wpz-insta_sidebar-section wpz-insta_sidebar-section-check-new<?php echo $user instanceof WP_Post ? ' active' : ''; ?>">
 								<h4 class="wpz-insta_sidebar-section-title"><?php esc_html_e( 'Check for new posts every', 'instagram-widget-by-wpzoom' ); ?></h4>
@@ -1874,6 +1937,12 @@ class WPZOOM_Instagram_Widget_Settings {
 									</label>
 
 									<label class="wpz-insta_table-row">
+										<input type="hidden" name="_wpz-insta_ajax-initial-load" value="0" />
+										<input type="checkbox" name="_wpz-insta_ajax-initial-load" value="1"<?php checked( $ajax_initial_load ); ?> />
+										<span><?php esc_html_e( 'AJAX initial load (improves page speed on first visit)', 'instagram-widget-by-wpzoom' ); ?></span>
+									</label>
+
+									<label class="wpz-insta_table-row">
 										<input type="hidden" name="_wpz-insta_lightbox" value="0" />
 										<input type="checkbox" name="_wpz-insta_lightbox" value="1"<?php checked( $lightbox ); ?> />
 										<span><?php esc_html_e( 'Open items in lightbox', 'instagram-widget-by-wpzoom' ); ?></span>
@@ -2101,7 +2170,18 @@ class WPZOOM_Instagram_Widget_Settings {
 					<h2 class="wpz-insta_tabs-config-connect-title"><?php esc_html_e( 'Select an Account', 'instagram-widget-by-wpzoom' ); ?></h2>
 					<p class="wpz-insta_tabs-config-connect-description"><?php esc_html_e( 'Show posts from this account:', 'instagram-widget-by-wpzoom' ); ?></p>
 
-					<ul class="wpz-insta_tabs-config-connect-accounts">
+					<?php
+					/**
+					 * Filter to allow modifying the account selector panel before rendering.
+					 *
+					 * @since 2.2.13
+					 * @param bool  $multi_select_enabled Whether multi-select mode is enabled.
+					 * @param array $all_users            All available user accounts.
+					 */
+					$multi_select_enabled = apply_filters( 'wpz-insta_account-selector-multi-select', false, $all_users );
+					?>
+
+					<ul class="wpz-insta_tabs-config-connect-accounts<?php echo $multi_select_enabled ? ' multi-select-enabled' : ''; ?>">
 						<?php foreach ( $all_users as $user ) :
 							$user_id = $user->ID;
 							$user_name = sprintf( '@%s', get_the_title( $user ) );
@@ -2112,11 +2192,25 @@ class WPZOOM_Instagram_Widget_Settings {
 
 							?>
 							<li data-user-id="<?php echo esc_attr( $user_id ); ?>" data-user-name="<?php echo esc_attr( $user_name ); ?>" data-user-type="<?php echo esc_attr( $user_type ); ?>" data-user-token="<?php echo esc_attr( $user_token ); ?>" data-has-page-id="<?php echo $user_has_page_id ? '1' : '0'; ?>">
-								<h3><?php echo $user_name; ?></h3>
-								<p><?php echo $user_type; ?></p>
+								<?php if ( $multi_select_enabled ) : ?>
+								<span class="wpz-insta-account-checkbox"><input type="checkbox" class="wpz-insta-account-select" value="<?php echo esc_attr( $user_id ); ?>" /></span>
+								<?php endif; ?>
+								<h3><?php echo esc_html( $user_name ); ?></h3>
+								<p><?php echo esc_html( $user_type ); ?></p>
 							</li>
 						<?php endforeach; ?>
 					</ul>
+
+					<?php
+					/**
+					 * Action to render additional content after account list in selector.
+					 *
+					 * @since 2.2.13
+					 * @param bool  $multi_select_enabled Whether multi-select mode is enabled.
+					 * @param array $all_users            All available user accounts.
+					 */
+					do_action( 'wpz-insta_account-selector-after-list', $multi_select_enabled, $all_users );
+					?>
 
 					<hr/>
 
@@ -2138,14 +2232,14 @@ class WPZOOM_Instagram_Widget_Settings {
 	function enqueue_preview_scripts() {
 		wp_enqueue_style(
 			'zoom-instagram-widget-preview',
-			plugin_dir_url( dirname( __FILE__ ) . '/instagram-widget-by-wpzoom.php' ) . 'dist/styles/frontend/preview.css',
+			WPZOOM_INSTAGRAM_PLUGIN_URL . 'dist/styles/frontend/preview.css',
 			array(),
 			WPZOOM_INSTAGRAM_VERSION
 		);
 
 		wp_enqueue_script(
 			'zoom-instagram-widget-preview',
-			plugin_dir_url( dirname( __FILE__ ) . '/instagram-widget-by-wpzoom.php' ) . 'dist/scripts/frontend/preview.js',
+			WPZOOM_INSTAGRAM_PLUGIN_URL . 'dist/scripts/frontend/preview.js',
 			array( 'jquery' ),
 			WPZOOM_INSTAGRAM_VERSION,
 			true
@@ -2155,7 +2249,10 @@ class WPZOOM_Instagram_Widget_Settings {
 	function preview_frame() {
 		$display = Wpzoom_Instagram_Widget_Display::getInstance();
 		$preview_args = self::get_clean_feed_settings_from_query();
-		$preview_args['feed-id'] = get_the_ID();
+
+		// Get feed ID from query parameter (passed from feed editor), fallback to get_the_ID() for other contexts.
+		$feed_id = isset( $_GET['wpz-insta-feed-id'] ) ? intval( $_GET['wpz-insta-feed-id'] ) : get_the_ID();
+		$preview_args['feed-id'] = $feed_id > 0 ? $feed_id : 0;
 
 		printf( '<div class="zoom-new-instagram-widget">%s</div>', $display->get_preview( $preview_args ) );
 	}
@@ -2173,7 +2270,7 @@ class WPZOOM_Instagram_Widget_Settings {
 		}
 
 		try {
-			require_once( plugin_dir_path( __FILE__ ) . 'vendor/autoload.php' );
+			require_once( WPZOOM_INSTAGRAM_PLUGIN_PATH . 'vendor/autoload.php' );
 
 			$document = new DiDom\Document( $output );
 			$body_content = $document->find( 'body > *:not(script):not(link)' );
@@ -2257,7 +2354,7 @@ class WPZOOM_Instagram_Widget_Settings {
         $pro_toggle = apply_filters( 'wpz-insta_admin-pro-options-toggle', true );
 
 
-		if ( 'toplevel_page_wpzoom-instagram' == $current_screen->id || 'wpz-insta_feed' == $current_screen->post_type || 'wpz-insta_user' == $current_screen->post_type || 'instagram_page_wpzoom-instagram-users' == $current_screen->id || 'wpz-insta_feed_page_wpz-insta_settings' == $current_screen->id || 'wpz-insta_feed_page_wpzoom-instagram-support' == $current_screen->id || 'settings_page_wpz-insta-connect' == $current_screen->id ) {
+		if ( 'toplevel_page_wpzoom-instagram' == $current_screen->id || 'wpz-insta_feed' == $current_screen->post_type || 'wpz-insta_user' == $current_screen->post_type || 'instagram_page_wpzoom-instagram-users' == $current_screen->id || 'wpz-insta_feed_page_wpz-insta_settings' == $current_screen->id || 'wpz-insta_feed_page_wpzoom-instagram-support' == $current_screen->id || 'wpz-insta_feed_page_wpzoom-instagram-insights' == $current_screen->id || 'settings_page_wpz-insta-connect' == $current_screen->id ) {
 			?>
 			<footer class="wpz-insta_settings-footer">
 				<div class="wpz-insta_settings-footer-wrap">
@@ -2796,8 +2893,8 @@ class WPZOOM_Instagram_Widget_Settings {
 		$user_business_page_id = get_post_meta( $user_id, '_wpz-insta_page_id', true ) ?: '';
 		
 		// Generate the same specific transient patterns that would be used by this feed
+		// Note: Do NOT include global 'zoom_instagram_is_configured' here - that would clear cache for ALL feeds
 		$base_patterns = array(
-			'zoom_instagram_is_configured',
 			'zoom_instagram_is_configured_feed_' . $post_ID,
 		);
 		
@@ -2834,15 +2931,18 @@ class WPZOOM_Instagram_Widget_Settings {
 			$legacy_base = 'zoom_instagram_is_configured_' . substr( $post_ID, 0, 20 );
 			delete_transient( $legacy_base );
 			delete_transient( $legacy_base . '_no_videos' );
-			
+
 			// Clear filtered variants of legacy transients for this feed only
-			$wpdb->query( 
-				$wpdb->prepare( 
-					"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s", 
+			$wpdb->query(
+				$wpdb->prepare(
+					"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s",
 					'_transient_' . $legacy_base . '%'
-				) 
+				)
 			);
 		}
+
+		// Always clear the HTML output cache for AJAX initial load
+		delete_transient( 'wpz_insta_feed_html_' . $post_ID );
 	}
 
 	/**
@@ -3443,6 +3543,7 @@ class WPZOOM_Instagram_Widget_Settings {
                             <li><?php _e( 'Display user info in the header', 'instagram-widget-by-wpzoom' ); ?></li>
                             <li><strong><?php _e( '[PRO] Display Follower Count', 'instagram-widget-by-wpzoom' ); ?></strong></li>
                             <li><strong><?php _e( '[PRO] Display Instagram Stories', 'instagram-widget-by-wpzoom' ); ?></strong></li>
+                            <li><strong><?php _e( '[PRO] Instagram Insights & Analytics', 'instagram-widget-by-wpzoom' ); ?></strong></li>
 							<li class="no-feature"><?php _e( 'Display hashtag feeds <small><em>Coming Soon</em></small>', 'instagram-widget-by-wpzoom' ); ?></li>
                             <li class="no-feature"><?php _e( 'Display feeds with your mention <small><em>Coming Soon</em></small>', 'instagram-widget-by-wpzoom' ); ?></li>
 						</ul>
@@ -3465,6 +3566,7 @@ class WPZOOM_Instagram_Widget_Settings {
                             <li><strong><?php _e( 'Does not require a Facebook page', 'instagram-widget-by-wpzoom' ); ?></strong></li>
                             <li class="x-feature"><?php _e( '[PRO] Display Follower Count', 'instagram-widget-by-wpzoom' ); ?></li>
                             <li class="x-feature"><?php _e( '[PRO] Display Instagram Stories', 'instagram-widget-by-wpzoom' ); ?></li>
+                            <li class="x-feature"><?php _e( '[PRO] Instagram Insights & Analytics', 'instagram-widget-by-wpzoom' ); ?></li>
                         </ul>
 
                         <note><?php esc_html_e( 'If the connection fails, please generate a new API token manually and enter it in the field Instagram API Access Token at the bottom of this page.', 'instagram-widget-by-wpzoom' ); ?></note><br/>
@@ -3600,8 +3702,8 @@ class WPZOOM_Instagram_Widget_Settings {
 		if ( self::is_wpzinsta_screen() ) {
 			wp_enqueue_media();
 			wp_enqueue_style( 'wp-color-picker' );
-			wp_enqueue_style( 'wpz-insta_block-frontend-style', plugin_dir_url( dirname( __FILE__ ) . '/instagram-widget-by-wpzoom.php' ) . 'dist/styles/backend/index.css', array( 'wp-color-picker' ), WPZOOM_INSTAGRAM_VERSION );
-			wp_enqueue_script( 'zoom-instagram-widget-admin', plugin_dir_url( dirname( __FILE__ ) . '/instagram-widget-by-wpzoom.php' ) . 'dist/scripts/backend/index.js', array( 'jquery', 'wp-color-picker' ), WPZOOM_INSTAGRAM_VERSION );
+			wp_enqueue_style( 'wpz-insta_block-frontend-style', WPZOOM_INSTAGRAM_PLUGIN_URL . 'dist/styles/backend/index.css', array( 'wp-color-picker' ), WPZOOM_INSTAGRAM_VERSION );
+			wp_enqueue_script( 'zoom-instagram-widget-admin', WPZOOM_INSTAGRAM_PLUGIN_URL . 'dist/scripts/backend/index.js', array( 'jquery', 'wp-color-picker' ), WPZOOM_INSTAGRAM_VERSION );
 			wp_localize_script(
 				'zoom-instagram-widget-admin',
 				'zoom_instagram_widget_admin',
@@ -3628,7 +3730,7 @@ class WPZOOM_Instagram_Widget_Settings {
 					'users_url' 					    => admin_url( self::$any_users ? 'edit.php?post_type=wpz-insta_user' : 'post-new.php?post_type=wpz-insta_user' ),
 					'edit_user_url'                     => admin_url( 'edit.php?post_type=wpz-insta_user#post-' ),
 					'preview_url'                       => site_url( '?wpz-insta-widget-preview=true' ),
-					'default_user_thumbnail'            => plugins_url( '/dist/images/backend/icon-insta.png', __FILE__ ),
+					'default_user_thumbnail'            => WPZOOM_INSTAGRAM_PLUGIN_URL . 'dist/images/backend/icon-insta.png',
 					'post_edit_url'                     => admin_url( 'post.php?action=edit&post=' ),
 					'ajax_url'                          => admin_url( 'admin-ajax.php' ),
                     'is_pro'                            => apply_filters( 'wpz-insta_is-pro', false ),

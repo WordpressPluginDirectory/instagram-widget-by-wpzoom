@@ -486,6 +486,12 @@ jQuery( function( $ ) {
 
 				if ( ! $target.is( '.preview-exclude' ) ) {
 					const key = $target.attr('name');
+
+					// Skip elements without a name attribute
+					if ( ! key ) {
+						return;
+					}
+
 					let trackingKey = key;
 					let currentValue;
 
@@ -1016,6 +1022,12 @@ jQuery( function( $ ) {
 
 		if ( params ) {
 			url += '&' + params;
+		}
+
+		// Add the post ID for the preview to identify the feed for Load More functionality
+		const postId = $( 'form#post input[name="post_ID"]' ).val();
+		if ( postId ) {
+			url += '&wpz-insta-feed-id=' + postId;
 		}
 
 		$( '#wpz-insta_widget-preview-view' ).closest( '.wpz-insta_sidebar-right' ).removeClass( 'hide-loading' );

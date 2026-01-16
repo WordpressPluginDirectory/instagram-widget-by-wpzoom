@@ -1,6 +1,57 @@
 ( function( $ ) {
+	// Image loading shimmer effect - needs to run early to catch images before they load
+	function initImageLoadingShimmer() {
+		$('.zoom-instagram-widget__items').each(function() {
+			const $container = $(this);
+
+			$container.find('.zoom-instagram-widget__item').each(function() {
+				const $item = $(this);
+
+				// Skip if already processed
+				if ($item.hasClass('wpz-insta-loaded') || $item.data('shimmer-init')) {
+					return;
+				}
+				$item.data('shimmer-init', true);
+
+				const $img = $item.find('img.zoom-instagram-link, img.zoom-instagram-link-new').first();
+
+				if ($img.length === 0) {
+					$item.addClass('wpz-insta-loaded');
+					return;
+				}
+
+				// Check if image is already loaded (cached)
+				if ($img[0].complete && $img[0].naturalWidth > 0) {
+					$item.addClass('wpz-insta-loaded');
+					return;
+				}
+
+				// Listen for image load
+				$img.on('load.shimmer', function() {
+					$item.addClass('wpz-insta-loaded');
+				});
+
+				// Handle error case - still show the item
+				$img.on('error.shimmer', function() {
+					$item.addClass('wpz-insta-loaded');
+				});
+			});
+		});
+	}
+
+	// Run as early as possible - on DOMContentLoaded
+	$(document).ready(function() {
+		initImageLoadingShimmer();
+	});
+
+	// Export globally so PRO plugin can call after Load More
+	window.wpzInstaImageShimmerInit = initImageLoadingShimmer;
+
 	$( window ).on( 'load', function () {
 		var ticking = false;
+
+		// Re-run shimmer init in case new feeds were added
+		initImageLoadingShimmer();
 
 		// Fast AJAX Load More functionality
 		function initLoadMoreButtons() {
@@ -67,7 +118,10 @@
 						
 						// Reinitialize any image processing for the specific container
 						$itemsContainer.zoomLoadAsyncImages();
-						
+
+						// Initialize image loading shimmer for new items
+						initImageLoadingShimmer();
+
 						// Check if this is masonry layout and handle accordingly
 						if ($itemsContainer.hasClass('layout-masonry')) {
 							// Try to use WordPress masonry if available
@@ -238,6 +292,199 @@
 
 		// Initialize load more buttons
 		initLoadMoreButtons();
+
+		/**
+		 * AJAX Initial Feed Load functionality
+		 * Finds placeholder elements and fetches actual content via AJAX
+		 */
+		function initAjaxFeeds() {
+			$('.wpz-insta-ajax-placeholder').each(function() {
+				const $placeholder = $(this);
+				const feedId = $placeholder.data('feed-id');
+					// Skip if already loading, loaded, or missing required data
+				if (!feedId || $placeholder.hasClass('loading') || $placeholder.hasClass('loaded')) {
+					return;
+				}
+
+				$placeholder.addClass('loading');
+
+				$.ajax({
+					url: wpzInstaAjax.ajaxurl,
+					type: 'POST',
+					dataType: 'json',
+					data: {
+						action: 'wpzoom_instagram_initial_load',
+						feed_id: feedId
+					},
+					success: function(response) {
+						if (response.success && response.data.html) {
+							// Replace placeholder with actual content
+							const $newContent = $(response.data.html);
+							$placeholder.replaceWith($newContent);
+
+							// Find the new feed container
+							const $newFeed = $newContent.hasClass('zoom-instagram')
+								? $newContent
+								: $newContent.find('.zoom-instagram');
+
+							if ($newFeed.length > 0) {
+								// Initialize the Instagram widget functionality
+								const $itemsContainer = $newFeed.find('.zoom-instagram-widget__items');
+
+								if ($itemsContainer.length > 0) {
+								// Check if this is a carousel layout
+								const isCarousel = $newFeed.hasClass('layout-carousel');
+
+								if (isCarousel) {
+									// Initialize Swiper for carousel layout
+									// The swiper element is .zoom-instagram-widget__items-wrapper.swiper
+									const $swiperEl = $newFeed.find('> .zoom-instagram-widget__items-wrapper.swiper');
+									if ($swiperEl.length > 0 && typeof Swiper !== 'undefined') {
+										// data-perpage is on the ul.swiper-wrapper element
+										const perpage = parseInt($itemsContainer.data('perpage')) || 3;
+										const perpageTablet = parseInt($itemsContainer.data('perpage-tablet')) || perpage;
+										const perpageMobile = parseInt($itemsContainer.data('perpage-mobile')) || perpage;
+										const spacing = parseFloat($itemsContainer.data('spacing')) || 20;
+
+										// Initialize lazy loading BEFORE Swiper so images start loading
+										if (typeof $.fn.lazy === 'function') {
+											$itemsContainer.find('.zoom-instagram-link-new').lazy();
+											$itemsContainer.find('a.zoom-instagram-link-old').lazy();
+										}
+
+										// Create Swiper instance
+										const carouselSwiper = new Swiper($swiperEl.get(0), {
+											direction: 'horizontal',
+											loop: false,
+											slidesPerView: perpage,
+											spaceBetween: spacing,
+											breakpoints: {
+												320: {
+													slidesPerView: perpageMobile,
+													spaceBetween: spacing
+												},
+												480: {
+													slidesPerView: perpageTablet,
+													spaceBetween: spacing
+												},
+												769: {
+													slidesPerView: perpage,
+													spaceBetween: spacing
+												}
+											},
+											autoHeight: true,
+											watchOverflow: true,
+											navigation: {
+												nextEl: $swiperEl.find('> .swiper-button-next').get(0),
+												prevEl: $swiperEl.find('> .swiper-button-prev').get(0)
+											},
+											keyboard: {
+												enabled: true,
+												onlyInViewport: true
+											}
+										});
+
+										$newFeed.addClass('carousel-active');
+
+										// Update Swiper after images load to fix autoHeight
+										const $images = $itemsContainer.find('img');
+										let loadedCount = 0;
+										const totalImages = $images.length;
+
+										if (totalImages > 0) {
+											$images.each(function() {
+												const img = this;
+												if (img.complete) {
+													loadedCount++;
+													if (loadedCount === totalImages) {
+														carouselSwiper.update();
+													}
+												} else {
+													$(img).on('load error', function() {
+														loadedCount++;
+														if (loadedCount === totalImages) {
+															carouselSwiper.update();
+														}
+													});
+												}
+											});
+											// Fallback: update after a delay in case load events don't fire
+											setTimeout(function() {
+												carouselSwiper.update();
+											}, 500);
+										}
+									}
+								} else if ($itemsContainer.hasClass('layout-masonry') && typeof $.fn.masonry === 'function') {
+									// Initialize masonry layout
+									$itemsContainer.masonry({
+										itemSelector: '.zoom-instagram-widget__item',
+										columnWidth: '.masonry-items-sizer',
+										percentPosition: true,
+										gutter: parseInt($itemsContainer.data('spacing') || 10)
+									});
+								} else {
+									// Initialize grid layout
+									$itemsContainer.zoomInstagramWidget();
+								}
+
+									// Load async images
+									$itemsContainer.zoomLoadAsyncImages();
+
+									// Initialize lightbox if enabled
+									if ($itemsContainer.attr('data-lightbox') === '1') {
+										$itemsContainer.zoomLightbox();
+									}
+								}
+
+								// Reinitialize load more buttons (free plugin button-based)
+								initLoadMoreButtons();
+
+								// Initialize image loading shimmer for new content
+								initImageLoadingShimmer();
+
+								// Initialize frontend (lightbox swipers from block.js)
+								if (typeof window.wpzInstaFrontendInit === 'function') {
+									window.wpzInstaFrontendInit();
+								}
+
+								// Initialize stories (single account)
+								if (typeof window.wpzInstaInitStories === 'function') {
+									window.wpzInstaInitStories();
+								}
+
+								// Initialize multi-account stories (PRO)
+								if (typeof window.wpzInstaMultiAccountStoriesInit === 'function') {
+									window.wpzInstaMultiAccountStoriesInit();
+								}
+
+								// Initialize multi-account load more (PRO)
+								if (typeof window.wpzInstaMultiAccountLoadMoreInit === 'function') {
+									window.wpzInstaMultiAccountLoadMoreInit();
+								}
+
+								// Initialize PRO form-based load more (single account)
+								if (typeof window.wpzInstaProLoadMoreInit === 'function') {
+									window.wpzInstaProLoadMoreInit();
+								}
+
+								// Trigger custom event for other scripts
+								$newFeed.trigger('wpz-insta:ajax-loaded', [feedId, response.data]);
+							}
+						} else {
+							console.error('Failed to load Instagram feed:', response.data || 'Unknown error');
+							$placeholder.removeClass('loading').addClass('error');
+						}
+					},
+					error: function(xhr, status, error) {
+						console.error('AJAX initial feed load error:', error);
+						$placeholder.removeClass('loading').addClass('error');
+					}
+				});
+			});
+		}
+
+		// Initialize AJAX feeds on page load
+		initAjaxFeeds();
 
 		$.fn.zoomLoadAsyncImages = function () {
 			return $(this).each(function () {
